@@ -9,6 +9,7 @@ app.use(express.static(path.join(__dirname,'public')));
 
 const PORT=process.env.PORT||3000;
 const rooms=new Map();
+const perf={ticks:0,snaps:0,tickHz:0,snapshotHz:0,lastCalc:Date.now()};
 const DIRS={u:[0,-1],d:[0,1],l:[-1,0],r:[1,0]},OP={u:'d',d:'u',l:'r',r:'l'};
 const WP={
  pistol:{name:'Пистолет',cool:.28,damage:2,pellets:1,spread:.04,speed:420,price:6},
@@ -37,7 +38,7 @@ function enemy(type,x,y){const hp=type==='king'?100:type==='blue'?12:10;return{i
 function hitObs(r,x,y,rad){return r.obs.some(q=>x+rad>q.x&&x-rad<q.x+q.w&&y+rad>q.y&&y-rad<q.y+q.h)}
 function moveEntity(r,o,dx,dy,rad){if(!hitObs(r,o.x+dx,o.y,rad))o.x+=dx;if(!hitObs(r,o.x,o.y+dy,rad))o.y+=dy;o.x=clamp(o.x,28,332);o.y=clamp(o.y,88,512)}
 function spawnPlayer(id,name,index){return{id,name:name||('Игрок '+(index+1)),x:index?210:150,y:300,hp:6,maxHp:6,coins:0,weps:['pistol',null,null],slot:0,w:'pistol',face:0,cd:0,inv:0,roll:0,rollCd:0,input:{x:0,y:0,aimX:180,aimY:300,fire:false},dead:false,deadUntil:0}}
-function publicState(room){const r=room.dungeon[room.current],now=Date.now();return{serverTime:now,seq:++room.snapshotSeq,code:room.code,current:room.current,room:{x:r.x,y:r.y,type:r.type,done:r.done,doors:r.doors,obs:r.obs,items:r.items},players:[...room.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,coins:p.coins,weps:p.weps,slot:p.slot,w:p.w,face:p.face,inv:p.inv,roll:p.roll,dead:p.dead,respawn:p.dead?Math.max(0,(p.deadUntil-now)/1000):0})),enemies:room.enemies.map(e=>({id:e.id,type:e.type,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp,r:e.r})),bullets:room.bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),enemyBullets:room.enemyBullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),kills:room.kills,portal:room.portal,shop:SHOP}}
+function publicState(room){const r=room.dungeon[room.current],now=Date.now();return{serverTime:now,seq:++room.snapshotSeq,serverPerf:{tickHz:perf.tickHz,snapshotHz:perf.snapshotHz,players:room.players.size,enemies:room.enemies.length,bullets:room.bullets.length+room.enemyBullets.length},code:room.code,current:room.current,room:{x:r.x,y:r.y,type:r.type,done:r.done,doors:r.doors,obs:r.obs,items:r.items},players:[...room.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,coins:p.coins,weps:p.weps,slot:p.slot,w:p.w,face:p.face,inv:p.inv,roll:p.roll,dead:p.dead,respawn:p.dead?Math.max(0,(p.deadUntil-now)/1000):0})),enemies:room.enemies.map(e=>({id:e.id,type:e.type,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp,r:e.r})),bullets:room.bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),enemyBullets:room.enemyBullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),kills:room.kills,portal:room.portal,shop:SHOP}}
 function roomOf(socket){const c=socket.data.room;return c&&rooms.get(c)}
 function safeDrop(r,x,y){for(let rad=0;rad<=140;rad+=20)for(let i=0;i<16;i++){const a=i*Math.PI/8,nx=clamp(x+Math.cos(a)*rad,45,315),ny=clamp(y+Math.sin(a)*rad,105,495);if(!hitObs(r,nx,ny,12))return[nx,ny]}return[180,300]}
 function transition(room,dir){const r=room.dungeon[room.current],next=r.doors[dir];if(!next||!r.done)return;room.current=next;const nr=room.dungeon[next];for(const p of room.players.values()){if(dir==='u'){p.x=180;p.y=490}else if(dir==='d'){p.x=180;p.y=110}else if(dir==='l'){p.x=320;p.y=300}else{p.x=40;p.y=300}}if(!nr.done&&room.enemies.length===0)spawnEnemies(room);else{room.enemies=[];room.bullets=[];room.enemyBullets=[]}}
@@ -66,6 +67,7 @@ function tick(room,dt){const r=room.dungeon[room.current],now=Date.now();
 }
 
 io.on('connection',socket=>{
+ socket.on('netProbe',(clientStamp,cb=()=>{})=>cb({serverTime:Date.now(),echo:clientStamp}));
  socket.on('createLobby',({name}={},cb=()=>{})=>{const room=makeRoom();rooms.set(room.code,room);room.players.set(socket.id,spawnPlayer(socket.id,name,0));socket.join(room.code);socket.data.room=room.code;room.started=true;cb({ok:true,code:room.code,id:socket.id});io.to(room.code).emit('state',publicState(room))});
  socket.on('joinLobby',({code:raw,name}={},cb=()=>{})=>{const c=String(raw||'').toUpperCase().trim(),room=rooms.get(c);if(!room)return cb({ok:false,error:'Лобби не найдено'});if(room.players.size>=2)return cb({ok:false,error:'Лобби уже заполнено'});room.players.set(socket.id,spawnPlayer(socket.id,name,room.players.size));socket.join(c);socket.data.room=c;cb({ok:true,code:c,id:socket.id});io.to(c).emit('state',publicState(room))});
  socket.on('input',data=>{const room=roomOf(socket),p=room&&room.players.get(socket.id);if(!p||p.dead)return;const x=Number(data?.x)||0,y=Number(data?.y)||0,aimX=Number(data?.aimX),aimY=Number(data?.aimY);p.input.x=clamp(x,-1,1);p.input.y=clamp(y,-1,1);if(Number.isFinite(aimX))p.input.aimX=clamp(aimX,0,360);if(Number.isFinite(aimY))p.input.aimY=clamp(aimY,0,640);p.input.fire=!!data?.fire});
@@ -75,7 +77,8 @@ io.on('connection',socket=>{
  socket.on('buy',idx=>{const room=roomOf(socket),p=room&&room.players.get(socket.id);if(!p)return;const r=room.dungeon[room.current],it=SHOP[Number(idx)];if(r.type!=='shop'||!it||p.coins<it.price)return;if(it.kind==='heart'){if(p.hp>=p.maxHp)return;p.coins-=it.price;p.hp=Math.min(p.maxHp,p.hp+2);return}if(p.weps.includes(it.weapon))return;p.coins-=it.price;const empty=p.weps.indexOf(null);if(empty>=0){p.weps[empty]=it.weapon;p.slot=empty;p.w=it.weapon}else{const [x,y]=safeDrop(r,180,390);r.items.push({id:Math.random().toString(36).slice(2),kind:'weapon',weapon:it.weapon,x,y})}});
  socket.on('disconnect',()=>{const room=roomOf(socket);if(!room)return;room.players.delete(socket.id);if(room.players.size===0)rooms.delete(room.code);else io.to(room.code).emit('state',publicState(room))});
 });
-setInterval(()=>{const now=Date.now();for(const room of rooms.values()){const dt=Math.min(.05,(now-room.last)/1000);room.last=now;tick(room,dt)}},1000/30);
-setInterval(()=>{for(const room of rooms.values())io.to(room.code).volatile.emit('state',publicState(room))},1000/20);
+setInterval(()=>{perf.ticks++;const now=Date.now();for(const room of rooms.values()){const dt=Math.min(.05,(now-room.last)/1000);room.last=now;tick(room,dt)}},1000/30);
+setInterval(()=>{perf.snaps++;for(const room of rooms.values())io.to(room.code).volatile.emit('state',publicState(room))},1000/20);
+setInterval(()=>{const now=Date.now(),sec=Math.max(.001,(now-perf.lastCalc)/1000);perf.tickHz=+(perf.ticks/sec).toFixed(1);perf.snapshotHz=+(perf.snaps/sec).toFixed(1);perf.ticks=0;perf.snaps=0;perf.lastCalc=now},1000);
 setInterval(()=>{const cutoff=Date.now()-1000*60*30;for(const [c,room] of rooms)if(room.players.size===0||room.last<cutoff)rooms.delete(c)},1000*60*5);
 server.listen(PORT,()=>console.log(`Mini Knight Online: http://localhost:${PORT}`));
