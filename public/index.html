@@ -1,4 +1,4 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>Mini Knight Online</title>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>Mini Knight Online v5</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0e0d16;font-family:system-ui,Segoe UI,sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;background:#0e0d16}.overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 35%,#23203a,#0e0d16 60%);z-index:5}.panel{width:min(92vw,420px);padding:28px;border:2px solid #5b5580;background:#171523;box-shadow:0 18px 60px #0008;text-align:center}.title{font-weight:900;font-size:34px;color:#ffd84a;letter-spacing:1px;margin-bottom:8px}.sub{color:#cfd3ff;margin-bottom:22px}.row{display:flex;gap:10px}.row>*{flex:1}input,button{width:100%;padding:13px 14px;border:0;font:inherit;font-weight:700}input{background:#28243c;color:#fff;outline:1px solid #5b5580;text-transform:uppercase}button{cursor:pointer;background:#4a7cff;color:white}button.alt{background:#8a5a2a}button:disabled{opacity:.5;cursor:not-allowed}.code{font-size:36px;letter-spacing:8px;color:#9fffdc;font-weight:900;margin:12px 0}.error{min-height:24px;color:#ff7a91;margin-top:10px}.tiny{font-size:12px;color:#999;margin-top:15px}.hidden{display:none!important}
 </style></head><body>
@@ -19,10 +19,12 @@ const SHOP=[['Сердце +2 HP',5,'#ff6b81'],['Пистолет',6,'#ffd84a'],
 function resize(){const w=innerWidth,h=innerHeight;cv.width=w*dpr;cv.height=h*dpr;sc=Math.min(w/W,h/H);ox=(w-W*sc)/2;oy=(h-H*sc)/2}addEventListener('resize',resize);resize();
 const lp=e=>[(e.clientX-ox)/sc,(e.clientY-oy)/sc];
 function me(){return state&&state.players.find(p=>p.id===myId)}
-function smoothEntity(obj,map,strength){
+function smoothEntity(obj,map,dt,speed=13){
  let v=map.get(obj.id);
- if(!v){v={x:obj.x,y:obj.y};map.set(obj.id,v)}
- v.x+=(obj.x-v.x)*strength;v.y+=(obj.y-v.y)*strength;
+ if(!v){v={x:obj.x,y:obj.y,tx:obj.x,ty:obj.y};map.set(obj.id,v)}
+ v.tx=obj.x;v.ty=obj.y;
+ const a=1-Math.exp(-speed*dt);
+ v.x+=(v.tx-v.x)*a;v.y+=(v.ty-v.y)*a;
  return {...obj,x:v.x,y:v.y}
 }
 
@@ -40,12 +42,15 @@ function predictedMe(p,dt){
  if(!localPred||lastRoomKey!==roomKey){localPred={x:p.x,y:p.y};lastRoomKey=roomKey}
  if(p.dead){localPred.x=p.x;localPred.y=p.y;return {...p,x:localPred.x,y:localPred.y}}
  const inp=currentMoveInput();
- let speed=p.roll>0?330:140;let dx=inp.x,dy=inp.y;
+ const moving=Math.hypot(inp.x,inp.y)>.08;
+ let speed=p.roll>0?330:140,dx=inp.x,dy=inp.y;
  if(p.roll>0&&Math.hypot(dx,dy)<.15){dx=Math.cos(p.face);dy=Math.sin(p.face)}
  clientMove(localPred,dx*speed*dt,dy*speed*dt,8);
- const err=Math.hypot(p.x-localPred.x,p.y-localPred.y);
- const corr=err>45?1:Math.min(1,dt*(err>16?7:2.2));
- localPred.x+=(p.x-localPred.x)*corr;localPred.y+=(p.y-localPred.y)*corr;
+ const ex=p.x-localPred.x,ey=p.y-localPred.y,err=Math.hypot(ex,ey);
+ // Не тянем локального игрока назад каждый сетевой кадр: это и давало дёрганье.
+ if(err>95){localPred.x=p.x;localPred.y=p.y}
+ else if(!moving&&p.roll<=0){const a=1-Math.exp(-7*dt);localPred.x+=ex*a;localPred.y+=ey*a}
+ else if(err>38){const a=1-Math.exp(-0.7*dt);localPred.x+=ex*a;localPred.y+=ey*a}
  return {...p,x:localPred.x,y:localPred.y};
 }
 
@@ -67,7 +72,7 @@ function drawRoom(){const r=state.room;rect(0,0,W,H,'#0e0d16');rect(20,80,320,44
  for(const it of r.items){if(it.kind==='weapon'){rect(it.x-11,it.y-8,22,15,'#8a5a2a');rect(it.x-3,it.y-5,6,6,WP[it.weapon].c);txt(WP[it.weapon].n,it.x,it.y-14,9,WP[it.weapon].c)}else if(it.kind==='coin'){circle(it.x,it.y,6,'#ffd84a')}}
  if(state.portal){for(let i=1;i<=4;i++){ctx.strokeStyle=i%2?'#7df':'#c6f';ctx.lineWidth=2;ctx.beginPath();ctx.ellipse(180,300,i*6,i*9,performance.now()/900*(i%2?1:-1),0,Math.PI*2);ctx.stroke()}}
 }
-function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.min(.10,(performance.now()-snapshotAt)/1000);for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(smoothEntity(e,visualEnemies,.22));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):smoothEntity(p,visualPlayers,.24);drawKnight(rp,p.id===myId)};
+function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.min(.10,(performance.now()-snapshotAt)/1000);for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(smoothEntity(e,visualEnemies,dt,11));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):smoothEntity(p,visualPlayers,dt,14);drawKnight(rp,p.id===myId)};
  const p=me();rect(0,0,W,60,'#0e0d16');if(p){for(let i=0;i<6;i++)circle(14+i*18,17,6,i<p.hp?'#ff4d6d':'#3a2a3a');txt('🪙 '+p.coins,122,20,12,'#ffd84a','left');txt(WP[p.w]?.n||'',10,47,12,WP[p.w]?.c||'#fff','left');for(let i=0;i<3;i++){const x=116+i*55,w=p.weps[i];rect(x,34,48,20,i===p.slot?'#5b5580':'#28243c');txt((i+1)+' '+(w?WP[w].n.slice(0,5):'—'),x+24,48,9,w?WP[w].c:'#777')}}txt('ЛОББИ '+state.code,350,18,8,'#9fffdc','right');
  // touch controls
  ctx.globalAlpha=.28;circle(70,590,36,'#fff');circle(300,590,36,'#ff5a64');circle(235,535,27,'#d7a93b');circle(300,520,25,'#6f69a0');ctx.globalAlpha=1;txt('ОГОНЬ',300,594,8,'#fff');txt('ВЗЯТЬ',235,539,8,'#fff');txt('КУВ',300,524,8,'#fff');
