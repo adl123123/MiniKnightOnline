@@ -4,7 +4,7 @@ const {Server}=require('socket.io');
 const path=require('path');
 const app=express();
 const server=http.createServer(app);
-const io=new Server(server,{cors:{origin:'*'}});
+const io=new Server(server,{cors:{origin:'*'},transports:['websocket'],pingInterval:10000,pingTimeout:10000});
 app.use(express.static(path.join(__dirname,'public')));
 
 const PORT=process.env.PORT||3000;
@@ -31,13 +31,13 @@ function genDungeon(){
  return {map,start:key(0,0)};
 }
 function layout(r){if(r.type==='start'||r.type==='shop')return;const n=r.type==='fight'?10+Math.floor(Math.random()*4):3;for(let i=0;i<n;i++){const w=20,h=20,x=40+Math.floor(Math.random()*14)*20,y=100+Math.floor(Math.random()*20)*20;if(Math.hypot(x+10-180,y+10-300)<85)continue;r.obs.push({x,y,w,h})}}
-function makeRoom(){const d=genDungeon();return {code:code(),players:new Map(),dungeon:d.map,current:d.start,enemies:[],bullets:[],enemyBullets:[],started:false,last:Date.now(),kills:0,portal:false};}
+function makeRoom(){const d=genDungeon();return {code:code(),players:new Map(),dungeon:d.map,current:d.start,enemies:[],bullets:[],enemyBullets:[],started:false,last:Date.now(),kills:0,portal:false,snapshotSeq:0};}
 function spawnEnemies(room){const r=room.dungeon[room.current];room.enemies=[];room.bullets=[];room.enemyBullets=[];room.portal=false;if(r.type==='boss'){room.enemies.push(enemy('king',180,200));return}if(r.type!=='fight')return;const count=4+r.dist;for(let i=0;i<count;i++){let x,y,t=0;do{x=rnd(45,315);y=rnd(110,490);t++}while(t<30&&(hitObs(r,x,y,14)||Math.hypot(x-180,y-300)<110));room.enemies.push(enemy(Math.random()<.35?'blue':'green',x,y))}}
 function enemy(type,x,y){const hp=type==='king'?100:type==='blue'?12:10;return{id:Math.random().toString(36).slice(2),type,x,y,hp,maxHp:hp,r:type==='king'?22:11,cd:rnd(.5,1.8),phase:rnd(0,6),half:false}}
 function hitObs(r,x,y,rad){return r.obs.some(q=>x+rad>q.x&&x-rad<q.x+q.w&&y+rad>q.y&&y-rad<q.y+q.h)}
 function moveEntity(r,o,dx,dy,rad){if(!hitObs(r,o.x+dx,o.y,rad))o.x+=dx;if(!hitObs(r,o.x,o.y+dy,rad))o.y+=dy;o.x=clamp(o.x,28,332);o.y=clamp(o.y,88,512)}
 function spawnPlayer(id,name,index){return{id,name:name||('Игрок '+(index+1)),x:index?210:150,y:300,hp:6,maxHp:6,coins:0,weps:['pistol',null,null],slot:0,w:'pistol',face:0,cd:0,inv:0,roll:0,rollCd:0,input:{x:0,y:0,aimX:180,aimY:300,fire:false},dead:false,deadUntil:0}}
-function publicState(room){const r=room.dungeon[room.current],now=Date.now();return{code:room.code,current:room.current,room:{x:r.x,y:r.y,type:r.type,done:r.done,doors:r.doors,obs:r.obs,items:r.items},players:[...room.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,coins:p.coins,weps:p.weps,slot:p.slot,w:p.w,face:p.face,inv:p.inv,roll:p.roll,dead:p.dead,respawn:p.dead?Math.max(0,(p.deadUntil-now)/1000):0})),enemies:room.enemies.map(e=>({id:e.id,type:e.type,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp,r:e.r})),bullets:room.bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),enemyBullets:room.enemyBullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),kills:room.kills,portal:room.portal,shop:SHOP}}
+function publicState(room){const r=room.dungeon[room.current],now=Date.now();return{serverTime:now,seq:++room.snapshotSeq,code:room.code,current:room.current,room:{x:r.x,y:r.y,type:r.type,done:r.done,doors:r.doors,obs:r.obs,items:r.items},players:[...room.players.values()].map(p=>({id:p.id,name:p.name,x:p.x,y:p.y,hp:p.hp,maxHp:p.maxHp,coins:p.coins,weps:p.weps,slot:p.slot,w:p.w,face:p.face,inv:p.inv,roll:p.roll,dead:p.dead,respawn:p.dead?Math.max(0,(p.deadUntil-now)/1000):0})),enemies:room.enemies.map(e=>({id:e.id,type:e.type,x:e.x,y:e.y,hp:e.hp,maxHp:e.maxHp,r:e.r})),bullets:room.bullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),enemyBullets:room.enemyBullets.map(b=>({x:b.x,y:b.y,vx:b.vx,vy:b.vy})),kills:room.kills,portal:room.portal,shop:SHOP}}
 function roomOf(socket){const c=socket.data.room;return c&&rooms.get(c)}
 function safeDrop(r,x,y){for(let rad=0;rad<=140;rad+=20)for(let i=0;i<16;i++){const a=i*Math.PI/8,nx=clamp(x+Math.cos(a)*rad,45,315),ny=clamp(y+Math.sin(a)*rad,105,495);if(!hitObs(r,nx,ny,12))return[nx,ny]}return[180,300]}
 function transition(room,dir){const r=room.dungeon[room.current],next=r.doors[dir];if(!next||!r.done)return;room.current=next;const nr=room.dungeon[next];for(const p of room.players.values()){if(dir==='u'){p.x=180;p.y=490}else if(dir==='d'){p.x=180;p.y=110}else if(dir==='l'){p.x=320;p.y=300}else{p.x=40;p.y=300}}if(!nr.done&&room.enemies.length===0)spawnEnemies(room);else{room.enemies=[];room.bullets=[];room.enemyBullets=[]}}
