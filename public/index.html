@@ -13,12 +13,25 @@
 <div id="waiting" class="overlay hidden"><div class="panel"><div class="title">ЛОББИ</div><div>Код комнаты:</div><div id="roomCode" class="code"></div><div id="waitText" class="sub">Ждём второго игрока…</div><button id="playNow">Играть</button><div class="tiny">Можно играть сразу — второй игрок подключится позже.</div></div></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const socket=io();const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0;
+const socket=io();const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),visualPlayers=new Map(),visualEnemies=new Map();
 const WP={pistol:{n:'Пистолет',c:'#ffd84a'},shotgun:{n:'Дробовик',c:'#ff8a4a'},smg:{n:'ПП',c:'#6ee7ff'},rifle:{n:'Винтовка',c:'#c58bff'}};
 const SHOP=[['Сердце +2 HP',5,'#ff6b81'],['Пистолет',6,'#ffd84a'],['Дробовик',10,'#ff8a4a'],['ПП',12,'#6ee7ff'],['Винтовка',15,'#c58bff']];
 function resize(){const w=innerWidth,h=innerHeight;cv.width=w*dpr;cv.height=h*dpr;sc=Math.min(w/W,h/H);ox=(w-W*sc)/2;oy=(h-H*sc)/2}addEventListener('resize',resize);resize();
 const lp=e=>[(e.clientX-ox)/sc,(e.clientY-oy)/sc];
 function me(){return state&&state.players.find(p=>p.id===myId)}
+function smoothEntity(obj,map,strength){
+ let v=map.get(obj.id);
+ if(!v){v={x:obj.x,y:obj.y};map.set(obj.id,v)}
+ v.x+=(obj.x-v.x)*strength;v.y+=(obj.y-v.y)*strength;
+ return {...obj,x:v.x,y:v.y}
+}
+function cleanupVisualMaps(){
+ if(!state)return;
+ const pids=new Set(state.players.map(p=>p.id)),eids=new Set(state.enemies.map(e=>e.id));
+ for(const k of visualPlayers.keys())if(!pids.has(k))visualPlayers.delete(k);
+ for(const k of visualEnemies.keys())if(!eids.has(k))visualEnemies.delete(k);
+}
+
 function rect(x,y,w,h,c){ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),w,h)}function txt(s,x,y,z,c,a='center'){ctx.font='bold '+z+'px monospace';ctx.textAlign=a;ctx.fillStyle=c;ctx.fillText(s,x,y)}
 function circle(x,y,r,c){ctx.fillStyle=c;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill()}
 function drawKnight(p,isMe){circle(p.x,p.y+9,9,'#0005');if(p.dead){ctx.globalAlpha=.38}rect(p.x-8,p.y-8,16,18,isMe?'#4a7cff':'#ff7a91');rect(p.x-6,p.y-14,12,7,'#c3cbe0');rect(p.x-3,p.y-18,6,4,isMe?'#ffd84a':'#9fffdc');ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.face);rect(5,-2,13,4,WP[p.w]?.c||'#fff');ctx.restore();ctx.globalAlpha=1;txt(p.dead?'☠ '+p.name:p.name,p.x,p.y-24,8,p.dead?'#ff7a91':(isMe?'#ffd84a':'#fff'));if(p.dead)txt('респавн '+Math.ceil(p.respawn||0),p.x,p.y-34,8,'#fff');}
@@ -30,7 +43,7 @@ function drawRoom(){const r=state.room;rect(0,0,W,H,'#0e0d16');rect(20,80,320,44
  for(const it of r.items){if(it.kind==='weapon'){rect(it.x-11,it.y-8,22,15,'#8a5a2a');rect(it.x-3,it.y-5,6,6,WP[it.weapon].c);txt(WP[it.weapon].n,it.x,it.y-14,9,WP[it.weapon].c)}else if(it.kind==='coin'){circle(it.x,it.y,6,'#ffd84a')}}
  if(state.portal){for(let i=1;i<=4;i++){ctx.strokeStyle=i%2?'#7df':'#c6f';ctx.lineWidth=2;ctx.beginPath();ctx.ellipse(180,300,i*6,i*9,performance.now()/900*(i%2?1:-1),0,Math.PI*2);ctx.stroke()}}
 }
-function render(){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();for(const b of state.bullets)rect(b.x-2,b.y-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x,b.y,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(e);for(const p of state.players)drawKnight(p,p.id===myId);
+function render(){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.min(.08,(performance.now()-snapshotAt)/1000);for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(smoothEntity(e,visualEnemies,.28));for(const p of state.players)drawKnight(smoothEntity(p,visualPlayers,p.id===myId?.52:.32),p.id===myId);
  const p=me();rect(0,0,W,60,'#0e0d16');if(p){for(let i=0;i<6;i++)circle(14+i*18,17,6,i<p.hp?'#ff4d6d':'#3a2a3a');txt('🪙 '+p.coins,122,20,12,'#ffd84a','left');txt(WP[p.w]?.n||'',10,47,12,WP[p.w]?.c||'#fff','left');for(let i=0;i<3;i++){const x=116+i*55,w=p.weps[i];rect(x,34,48,20,i===p.slot?'#5b5580':'#28243c');txt((i+1)+' '+(w?WP[w].n.slice(0,5):'—'),x+24,48,9,w?WP[w].c:'#777')}}txt('ЛОББИ '+state.code,350,18,8,'#9fffdc','right');
  // touch controls
  ctx.globalAlpha=.28;circle(70,590,36,'#fff');circle(300,590,36,'#ff5a64');circle(235,535,27,'#d7a93b');circle(300,520,25,'#6f69a0');ctx.globalAlpha=1;txt('ОГОНЬ',300,594,8,'#fff');txt('ВЗЯТЬ',235,539,8,'#fff');txt('КУВ',300,524,8,'#fff');
@@ -44,5 +57,5 @@ cv.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;const[x,
 function enterGame(){playing=true;document.getElementById('lobby').classList.add('hidden');document.getElementById('waiting').classList.add('hidden')}
 document.getElementById('create').onclick=()=>{const name=document.getElementById('name').value.trim()||'Рыцарь';socket.emit('createLobby',{name},res=>{if(!res.ok)return showErr(res.error);myId=res.id;document.getElementById('roomCode').textContent=res.code;document.getElementById('lobby').classList.add('hidden');document.getElementById('waiting').classList.remove('hidden')})};
 document.getElementById('join').onclick=()=>{const name=document.getElementById('name').value.trim()||'Рыцарь',code=document.getElementById('code').value.trim();socket.emit('joinLobby',{name,code},res=>{if(!res.ok)return showErr(res.error);myId=res.id;enterGame()})};document.getElementById('playNow').onclick=enterGame;function showErr(s){document.getElementById('err').textContent=s||'Ошибка'}
-socket.on('state',s=>{state=s;if(!myId)return;const wait=document.getElementById('waitText');if(wait)wait.textContent=s.players.length>=2?'Второй игрок подключился!':'Ждём второго игрока…'});
+socket.on('state',s=>{state=s;snapshotAt=performance.now();cleanupVisualMaps();if(!myId)return;const wait=document.getElementById('waitText');if(wait)wait.textContent=s.players.length>=2?'Второй игрок подключился!':'Ждём второго игрока…'});
 </script></body></html>
