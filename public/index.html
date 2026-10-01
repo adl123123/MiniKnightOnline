@@ -1,4 +1,4 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>Mini Knight Online v7</title>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"><title>Mini Knight Online v9</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0e0d16;font-family:system-ui,Segoe UI,sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;background:#0e0d16}.overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 35%,#23203a,#0e0d16 60%);z-index:5}.panel{width:min(92vw,420px);padding:28px;border:2px solid #5b5580;background:#171523;box-shadow:0 18px 60px #0008;text-align:center}.title{font-weight:900;font-size:34px;color:#ffd84a;letter-spacing:1px;margin-bottom:8px}.sub{color:#cfd3ff;margin-bottom:22px}.row{display:flex;gap:10px}.row>*{flex:1}input,button{width:100%;padding:13px 14px;border:0;font:inherit;font-weight:700}input{background:#28243c;color:#fff;outline:1px solid #5b5580;text-transform:uppercase}button{cursor:pointer;background:#4a7cff;color:white}button.alt{background:#8a5a2a}button:disabled{opacity:.5;cursor:not-allowed}.code{font-size:36px;letter-spacing:8px;color:#9fffdc;font-weight:900;margin:12px 0}.error{min-height:24px;color:#ff7a91;margin-top:10px}.tiny{font-size:12px;color:#999;margin-top:15px}.hidden{display:none!important}
 </style></head><body>
@@ -13,7 +13,7 @@
 <div id="waiting" class="overlay hidden"><div class="panel"><div class="title">ЛОББИ</div><div>Код комнаты:</div><div id="roomCode" class="code"></div><div id="waitText" class="sub">Ждём второго игрока…</div><button id="playNow">Играть</button><div class="tiny">Можно играть сразу — второй игрок подключится позже.</div></div></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const socket=io({transports:['websocket']});const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),localPred=null,lastFrame=performance.now(),lastRoomKey=null,playerHistory=new Map(),enemyHistory=new Map(),clockOffset=null,netJitter=0,interpDelay=140,lastArrivalWall=0,lastServerTime=0,localRollUntil=0,localRollDir={x:0,y:0},debugHud=true,netDiag={rtt:0,jitter:0,lastRtt:0,fps:0,frames:0,fpsAt:performance.now(),snapshots:0,snapHz:0,snapAt:performance.now(),dropped:0,lastSeq:null,lastPacketAt:performance.now()};
+const socket=io({transports:['websocket']});const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),localPred=null,lastFrame=performance.now(),lastRoomKey=null,playerHistory=new Map(),enemyHistory=new Map(),clockOffset=null,netJitter=0,arrivalJitter=0,interpDelay=220,lastArrivalWall=0,lastServerTime=0,localRollUntil=0,localRollDir={x:0,y:0},debugHud=true,netDiag={rtt:0,jitter:0,lastRtt:0,minRtt:1e9,fps:60,frames:0,fpsAt:performance.now(),snapshots:0,snapHz:0,snapAt:performance.now(),dropped:0,lastSeq:null,lastPacketAt:performance.now(),quality:'—'};
 const WP={pistol:{n:'Пистолет',c:'#ffd84a'},shotgun:{n:'Дробовик',c:'#ff8a4a'},smg:{n:'ПП',c:'#6ee7ff'},rifle:{n:'Винтовка',c:'#c58bff'}};
 const SHOP=[['Сердце +2 HP',5,'#ff6b81'],['Пистолет',6,'#ffd84a'],['Дробовик',10,'#ff8a4a'],['ПП',12,'#6ee7ff'],['Винтовка',15,'#c58bff']];
 function resize(){const w=innerWidth,h=innerHeight;cv.width=w*dpr;cv.height=h*dpr;sc=Math.min(w/W,h/H);ox=(w-W*sc)/2;oy=(h-H*sc)/2}addEventListener('resize',resize);resize();
@@ -24,28 +24,30 @@ function pushHistory(map,obj,serverTime){
  // Серверное время, а не время прихода пакета: сетевой jitter больше не превращается в рывки.
  if(h.length&&serverTime<=h[h.length-1].t)return;
  h.push({t:serverTime,x:obj.x,y:obj.y,face:obj.face||0,dead:!!obj.dead,roll:obj.roll||0});
- const cutoff=serverTime-2200;while(h.length>2&&h[0].t<cutoff)h.shift();
+ const cutoff=serverTime-5000;while(h.length>2&&h[0].t<cutoff)h.shift();
 }
 function serverNow(){return Date.now()-(clockOffset||0)}
-function interpHistory(obj,map,delay=interpDelay,maxExtrapMs=80){
+function interpHistory(obj,map,delay=interpDelay,maxExtrapMs=35){
  const h=map.get(obj.id);if(!h||!h.length)return obj;
  const target=serverNow()-delay;
  if(h.length===1)return {...obj,x:h[0].x,y:h[0].y,face:h[0].face};
  if(target<=h[0].t){const q=h[0];return {...obj,x:q.x,y:q.y,face:q.face}}
  const last=h[h.length-1],prev=h[h.length-2];
- // Если очередной пакет чуть опоздал, не замораживаем игрока: очень короткая безопасная extrapolation.
+ // При плохой сети почти не экстраполируем: лучше небольшая задержка, чем рывок вперёд-назад.
  if(target>=last.t){
    const extra=Math.min(maxExtrapMs,target-last.t),span=Math.max(1,last.t-prev.t);
    let vx=(last.x-prev.x)/span,vy=(last.y-prev.y)/span;
-   const speed=Math.hypot(vx,vy)*1000,maxSpeed=390;
+   const speed=Math.hypot(vx,vy)*1000,maxSpeed=360;
    if(speed>maxSpeed){const k=maxSpeed/speed;vx*=k;vy*=k}
    return {...obj,x:last.x+vx*extra,y:last.y+vy*extra,face:last.face};
  }
  let lo=0,hi=h.length-1;
  while(hi-lo>1){const m=(lo+hi)>>1;if(h[m].t<=target)lo=m;else hi=m}
  const a=h[lo],b=h[hi],span=Math.max(1,b.t-a.t),u=Math.max(0,Math.min(1,(target-a.t)/span));
+ // smoothstep уменьшает визуальный удар при неравномерных сетевых интервалах.
+ const su=u*u*(3-2*u);
  let df=((b.face-a.face+Math.PI*3)%(Math.PI*2))-Math.PI;
- return {...obj,x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u,face:a.face+df*u};
+ return {...obj,x:a.x+(b.x-a.x)*su,y:a.y+(b.y-a.y)*su,face:a.face+df*su};
 }
 
 function currentMoveInput(){
@@ -101,31 +103,56 @@ function drawRoom(){const r=state.room;rect(0,0,W,H,'#0e0d16');rect(20,80,320,44
 function drawDebug(){
  if(!debugHud)return;
  const now=performance.now(),age=Math.max(0,now-netDiag.lastPacketAt),sp=state?.serverPerf||{};
- const x=8,y=66,w=154,h=128;
- ctx.save();ctx.globalAlpha=.88;ctx.fillStyle='#0b0b12';ctx.fillRect(x,y,w,h);ctx.globalAlpha=1;
+ const q=netDiag.rtt<120&&netDiag.jitter<35?'GOOD':netDiag.rtt<220&&netDiag.jitter<90?'OK':'UNSTABLE';
+ netDiag.quality=q;
+ const qc=q==='GOOD'?'#8f8':q==='OK'?'#fd8':'#f88';
+ const x=8,y=66,w=176,h=164;
+ ctx.save();ctx.globalAlpha=.9;ctx.fillStyle='#0b0b12';ctx.fillRect(x,y,w,h);ctx.globalAlpha=1;
  ctx.strokeStyle='#4f4a6d';ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1);
- ctx.font='bold 10px monospace';ctx.textAlign='left';ctx.fillStyle='#7df';ctx.fillText('NET DEBUG v8.1  [F3]',x+7,y+14);
+ ctx.font='bold 10px monospace';ctx.textAlign='left';ctx.fillStyle='#7df';ctx.fillText('NET DEBUG v9',x+7,y+14);
+ ctx.fillStyle=qc;ctx.fillText('QUALITY: '+q,x+88,y+14);
  ctx.font='10px monospace';
  const rows=[
-  ['RTT',Math.round(netDiag.rtt)+' ms',netDiag.rtt<100?'#8f8':netDiag.rtt<180?'#fd8':'#f88'],
-  ['Jitter',Math.round(netDiag.jitter)+' ms',netDiag.jitter<20?'#8f8':netDiag.jitter<50?'#fd8':'#f88'],
+  ['RTT',Math.round(netDiag.rtt)+' ms',netDiag.rtt<120?'#8f8':netDiag.rtt<220?'#fd8':'#f88'],
+  ['Jitter',Math.round(netDiag.jitter)+' ms',netDiag.jitter<35?'#8f8':netDiag.jitter<90?'#fd8':'#f88'],
   ['Client FPS',Math.round(netDiag.fps),netDiag.fps>=50?'#8f8':netDiag.fps>=30?'#fd8':'#f88'],
   ['Snapshots',netDiag.snapHz.toFixed(1)+'/s',netDiag.snapHz>=17?'#8f8':netDiag.snapHz>=12?'#fd8':'#f88'],
   ['Dropped',String(netDiag.dropped),netDiag.dropped===0?'#8f8':'#fd8'],
   ['Packet age',Math.round(age)+' ms',age<120?'#8f8':age<250?'#fd8':'#f88'],
+  ['Interp',Math.round(interpDelay)+' ms',interpDelay<260?'#8f8':interpDelay<400?'#fd8':'#f88'],
+  ['Clock off',clockOffset==null?'—':Math.round(clockOffset)+' ms','#bbb'],
   ['Server tick',(sp.tickHz??0)+'/s',(sp.tickHz??0)>=27?'#8f8':'#f88'],
   ['Server snap',(sp.snapshotHz??0)+'/s',(sp.snapshotHz??0)>=17?'#8f8':'#f88']
  ];
- rows.forEach((r,i)=>{const yy=y+28+i*12;ctx.fillStyle='#bbb';ctx.fillText(r[0]+':',x+7,yy);ctx.fillStyle=r[2];ctx.fillText(r[1],x+82,yy)});
+ rows.forEach((r,i)=>{const yy=y+30+i*12;ctx.fillStyle='#bbb';ctx.fillText(r[0]+':',x+7,yy);ctx.fillStyle=r[2];ctx.fillText(r[1],x+92,yy)});
  ctx.restore();
 }
-function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.max(0,Math.min(.08,state?.serverTime?(serverNow()-state.serverTime)/1000:(performance.now()-snapshotAt)/1000));for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(interpHistory(e,enemyHistory,interpDelay,70));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):interpHistory(p,playerHistory,interpDelay,80);drawKnight(rp,p.id===myId)};
+function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;netDiag.frames++;if(now-netDiag.fpsAt>=500){netDiag.fps=netDiag.frames*1000/(now-netDiag.fpsAt);netDiag.frames=0;netDiag.fpsAt=now;}ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.max(0,Math.min(.08,state?.serverTime?(serverNow()-state.serverTime)/1000:(performance.now()-snapshotAt)/1000));for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(interpHistory(e,enemyHistory,interpDelay,25));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):interpHistory(p,playerHistory,interpDelay,30);drawKnight(rp,p.id===myId)};
  const p=me();rect(0,0,W,60,'#0e0d16');if(p){for(let i=0;i<6;i++)circle(14+i*18,17,6,i<p.hp?'#ff4d6d':'#3a2a3a');txt('🪙 '+p.coins,122,20,12,'#ffd84a','left');txt(WP[p.w]?.n||'',10,47,12,WP[p.w]?.c||'#fff','left');for(let i=0;i<3;i++){const x=116+i*55,w=p.weps[i];rect(x,34,48,20,i===p.slot?'#5b5580':'#28243c');txt((i+1)+' '+(w?WP[w].n.slice(0,5):'—'),x+24,48,9,w?WP[w].c:'#777')}}txt('ЛОББИ '+state.code,350,18,8,'#9fffdc','right');
  // touch controls
  ctx.globalAlpha=.28;circle(70,590,36,'#fff');circle(300,590,36,'#ff5a64');circle(235,535,27,'#d7a93b');circle(300,520,25,'#6f69a0');ctx.globalAlpha=1;txt('ОГОНЬ',300,594,8,'#fff');txt('ВЗЯТЬ',235,539,8,'#fff');txt('КУВ',300,524,8,'#fff');
  if(p&&p.dead){ctx.fillStyle='rgba(0,0,0,.38)';ctx.fillRect(0,60,W,480);txt('ТЫ ПАЛ',180,270,30,'#ff5470');txt('Возрождение через '+Math.max(1,Math.ceil(p.respawn||0)),180,305,14,'#fff')}if(shopOpen&&!p?.dead)drawShop(p);drawDebug();requestAnimationFrame(render)}requestAnimationFrame(render);
 function drawShop(p){ctx.fillStyle='rgba(7,6,14,.92)';ctx.fillRect(28,92,304,430);rect(40,106,280,42,'#28243c');txt('МАГАЗИН',180,132,22,'#ffd84a');txt('Монеты: '+p.coins,180,160,13,'#ffd84a');for(let i=0;i<SHOP.length;i++){const [n,price,c]=SHOP[i],y=182+i*55;rect(48,y,264,44,'#211e33');rect(48,y,4,44,c);txt((i+1)+'. '+n,62,y+20,12,c,'left');txt(price+' мон.',300,y+27,11,'#ffd84a','right')}txt('1–5 / тап — купить',180,482,11,'#fff');txt('E / ESC — закрыть',180,505,11,'#cfd3ff')}
-function sendInput(){if(!playing||!state)return;const p=me();let x=0,y=0,fire=false;if(p&&!p.dead){const inp=currentMoveInput();x=inp.x;y=inp.y;fire=mouse.down||fireTouch!==null}const payload={x:+x.toFixed(2),y:+y.toFixed(2),aimX:Math.round(mouse.x),aimY:Math.round(mouse.y),fire};const sig=JSON.stringify(payload),now=performance.now();if(sig!==lastInput||now-lastInputAt>500){socket.emit('input',payload);lastInput=sig;lastInputAt=now}}setInterval(sendInput,40);setInterval(()=>{const start=performance.now();socket.emit('netProbe',start,res=>{const r=performance.now()-start;netDiag.jitter=netDiag.lastRtt?netDiag.jitter*.8+Math.abs(r-netDiag.lastRtt)*.2:0;netDiag.rtt=netDiag.rtt?netDiag.rtt*.7+r*.3:r;netDiag.lastRtt=r})},1000);
+function sendInput(){if(!playing||!state)return;const p=me();let x=0,y=0,fire=false;if(p&&!p.dead){const inp=currentMoveInput();x=inp.x;y=inp.y;fire=mouse.down||fireTouch!==null}const payload={x:+x.toFixed(2),y:+y.toFixed(2),aimX:Math.round(mouse.x),aimY:Math.round(mouse.y),fire};const sig=JSON.stringify(payload),now=performance.now();if(sig!==lastInput||now-lastInputAt>500){socket.emit('input',payload);lastInput=sig;lastInputAt=now}}setInterval(sendInput,40);
+setInterval(()=>{
+ const p0=performance.now(),w0=Date.now();
+ socket.emit('netProbe',{wall:w0},res=>{
+   const p1=performance.now(),w1=Date.now(),r=p1-p0;
+   const diff=netDiag.lastRtt?Math.abs(r-netDiag.lastRtt):0;
+   netDiag.jitter=netDiag.lastRtt?netDiag.jitter*.82+diff*.18:0;
+   netDiag.rtt=netDiag.rtt?netDiag.rtt*.72+r*.28:r;
+   netDiag.minRtt=Math.min(netDiag.minRtt,r);netDiag.lastRtt=r;
+   if(res&&Number.isFinite(res.serverTime)){
+     // NTP-подобная оценка: серверное время сравниваем с серединой RTT, а не с моментом прихода пакета.
+     const off=((w0+w1)/2)-res.serverTime;
+     const goodSample=r<=Math.max(netDiag.minRtt*1.8,netDiag.rtt*1.15);
+     if(clockOffset==null)clockOffset=off;
+     else if(goodSample)clockOffset=clockOffset*.86+off*.14;
+   }
+   const target=Math.max(150,Math.min(520,145+Math.max(netDiag.jitter*2.4,arrivalJitter*3.2)));
+   interpDelay=interpDelay*.88+target*.12;
+ })
+},700);
 function interact(){const p=me();if(!p)return;if(state.room.type==='shop'&&Math.hypot(p.x-180,p.y-300)<85){shopOpen=!shopOpen;return}socket.emit('interact')}
 addEventListener('keydown',e=>{if(e.code==='F3'){debugHud=!debugHud;e.preventDefault();return}keys[e.code]=true;if(['Space','KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Digit1','Digit2','Digit3','Digit4','Digit5','KeyE','Escape'].includes(e.code))e.preventDefault();if(!playing)return;if(shopOpen){if(e.code==='KeyE'||e.code==='Escape')shopOpen=false;else if(/^Digit[1-5]$/.test(e.code))socket.emit('buy',+e.code.slice(5)-1);return}if(e.code==='Space')triggerRoll();else if(/^Digit[1-3]$/.test(e.code))socket.emit('slot',+e.code.slice(5)-1);else if(e.code==='KeyE')interact()});addEventListener('keyup',e=>keys[e.code]=false);
 cv.addEventListener('mousemove',e=>{[mouse.x,mouse.y]=lp(e)});cv.addEventListener('mousedown',e=>{if(e.button!==0)return;[mouse.x,mouse.y]=lp(e);if(shopOpen){for(let i=0;i<5;i++){const y=182+i*55;if(mouse.x>=48&&mouse.x<=312&&mouse.y>=y&&mouse.y<=y+44){socket.emit('buy',i);return}}}mouse.down=true});addEventListener('mouseup',()=>mouse.down=false);cv.addEventListener('contextmenu',e=>e.preventDefault());
@@ -137,15 +164,13 @@ socket.on('state',s=>{
  netDiag.lastPacketAt=performance.now();netDiag.snapshots++;if(netDiag.lastSeq!=null&&Number.isFinite(s.seq)&&s.seq>netDiag.lastSeq+1)netDiag.dropped+=s.seq-netDiag.lastSeq-1;if(Number.isFinite(s.seq))netDiag.lastSeq=s.seq;const sn=performance.now();if(sn-netDiag.snapAt>=1000){netDiag.snapHz=netDiag.snapshots*1000/(sn-netDiag.snapAt);netDiag.snapshots=0;netDiag.snapAt=sn}
  const oldRoom=state?.current,arrivalWall=Date.now(),arrivalPerf=performance.now();
  if(Number.isFinite(s.serverTime)){
-   const sampleOffset=arrivalWall-s.serverTime;
-   // Берём нижнюю/плавную оценку смещения часов, чтобы скачок ping не двигал временную шкалу назад-вперёд.
-   if(clockOffset==null)clockOffset=sampleOffset;else if(sampleOffset<clockOffset)clockOffset=clockOffset*.85+sampleOffset*.15;else clockOffset=clockOffset*.985+sampleOffset*.015;
    if(lastArrivalWall&&lastServerTime){
      const arrivalDt=arrivalWall-lastArrivalWall,serverDt=s.serverTime-lastServerTime;
      const sampleJitter=Math.abs(arrivalDt-serverDt);
-     netJitter=netJitter*.9+sampleJitter*.1;
-     // Обычно 120–180 мс. При нестабильной сети буфер сам немного увеличивается.
-     interpDelay=Math.max(120,Math.min(220,125+netJitter*2.2));
+     netJitter=netJitter*.88+sampleJitter*.12;
+     arrivalJitter=arrivalJitter*.9+sampleJitter*.1;
+     const target=Math.max(150,Math.min(520,145+Math.max(netDiag.jitter*2.4,arrivalJitter*3.2)));
+     interpDelay=interpDelay*.92+target*.08;
    }
    lastArrivalWall=arrivalWall;lastServerTime=s.serverTime;
  }

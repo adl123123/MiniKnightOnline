@@ -67,7 +67,7 @@ function tick(room,dt){const r=room.dungeon[room.current],now=Date.now();
 }
 
 io.on('connection',socket=>{
- socket.on('netProbe',(clientStamp,cb=()=>{})=>cb({serverTime:Date.now(),echo:clientStamp}));
+ socket.on('netProbe',(clientStamp,cb=()=>{})=>cb({serverTime:Date.now(),echo:clientStamp,serverTick:perf.tickHz}));
  socket.on('createLobby',({name}={},cb=()=>{})=>{const room=makeRoom();rooms.set(room.code,room);room.players.set(socket.id,spawnPlayer(socket.id,name,0));socket.join(room.code);socket.data.room=room.code;room.started=true;cb({ok:true,code:room.code,id:socket.id});io.to(room.code).emit('state',publicState(room))});
  socket.on('joinLobby',({code:raw,name}={},cb=()=>{})=>{const c=String(raw||'').toUpperCase().trim(),room=rooms.get(c);if(!room)return cb({ok:false,error:'Лобби не найдено'});if(room.players.size>=2)return cb({ok:false,error:'Лобби уже заполнено'});room.players.set(socket.id,spawnPlayer(socket.id,name,room.players.size));socket.join(c);socket.data.room=c;cb({ok:true,code:c,id:socket.id});io.to(c).emit('state',publicState(room))});
  socket.on('input',data=>{const room=roomOf(socket),p=room&&room.players.get(socket.id);if(!p||p.dead)return;const x=Number(data?.x)||0,y=Number(data?.y)||0,aimX=Number(data?.aimX),aimY=Number(data?.aimY);p.input.x=clamp(x,-1,1);p.input.y=clamp(y,-1,1);if(Number.isFinite(aimX))p.input.aimX=clamp(aimX,0,360);if(Number.isFinite(aimY))p.input.aimY=clamp(aimY,0,640);p.input.fire=!!data?.fire});
