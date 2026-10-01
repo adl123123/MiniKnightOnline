@@ -13,7 +13,7 @@
 <div id="waiting" class="overlay hidden"><div class="panel"><div class="title">ЛОББИ</div><div>Код комнаты:</div><div id="roomCode" class="code"></div><div id="waitText" class="sub">Ждём второго игрока…</div><button id="playNow">Играть</button><div class="tiny">Можно играть сразу — второй игрок подключится позже.</div></div></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const socket=io({transports:['websocket']});const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),localPred=null,lastFrame=performance.now(),lastRoomKey=null,playerHistory=new Map(),enemyHistory=new Map(),clockOffset=null,netJitter=0,arrivalJitter=0,interpDelay=220,lastArrivalWall=0,lastServerTime=0,localRollUntil=0,localRollDir={x:0,y:0},debugHud=true,netDiag={rtt:0,jitter:0,lastRtt:0,minRtt:1e9,fps:60,frames:0,fpsAt:performance.now(),snapshots:0,snapHz:0,snapAt:performance.now(),dropped:0,lastSeq:null,lastPacketAt:performance.now(),quality:'—'};
+const socket=io({transports:['websocket']});const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),localPred=null,lastFrame=performance.now(),lastRoomKey=null,playerHistory=new Map(),enemyHistory=new Map(),clockOffset=null,netJitter=0,arrivalJitter=0,interpDelay=130,lastArrivalWall=0,lastServerTime=0,localRollUntil=0,localRollDir={x:0,y:0},debugHud=true,netDiag={rtt:0,jitter:0,lastRtt:0,minRtt:1e9,fps:60,frames:0,fpsAt:performance.now(),snapshots:0,snapHz:0,snapAt:performance.now(),dropped:0,lastSeq:null,lastPacketAt:performance.now(),quality:'—'};
 const WP={pistol:{n:'Пистолет',c:'#ffd84a'},shotgun:{n:'Дробовик',c:'#ff8a4a'},smg:{n:'ПП',c:'#6ee7ff'},rifle:{n:'Винтовка',c:'#c58bff'}};
 const SHOP=[['Сердце +2 HP',5,'#ff6b81'],['Пистолет',6,'#ffd84a'],['Дробовик',10,'#ff8a4a'],['ПП',12,'#6ee7ff'],['Винтовка',15,'#c58bff']];
 function resize(){const w=innerWidth,h=innerHeight;cv.width=w*dpr;cv.height=h*dpr;sc=Math.min(w/W,h/H);ox=(w-W*sc)/2;oy=(h-H*sc)/2}addEventListener('resize',resize);resize();
@@ -23,31 +23,32 @@ function pushHistory(map,obj,serverTime){
  let h=map.get(obj.id);if(!h){h=[];map.set(obj.id,h)}
  // Серверное время, а не время прихода пакета: сетевой jitter больше не превращается в рывки.
  if(h.length&&serverTime<=h[h.length-1].t)return;
- h.push({t:serverTime,x:obj.x,y:obj.y,face:obj.face||0,dead:!!obj.dead,roll:obj.roll||0});
+ let vx=Number(obj.vx)||0,vy=Number(obj.vy)||0;
+ if(h.length&&!obj.vx&&!obj.vy){const q=h[h.length-1],dt=Math.max(1,serverTime-q.t);vx=(obj.x-q.x)/dt;vy=(obj.y-q.y)/dt}
+ h.push({t:serverTime,x:obj.x,y:obj.y,face:obj.face||0,dead:!!obj.dead,roll:obj.roll||0,vx,vy});
  const cutoff=serverTime-5000;while(h.length>2&&h[0].t<cutoff)h.shift();
 }
 function serverNow(){return Date.now()-(clockOffset||0)}
-function interpHistory(obj,map,delay=interpDelay,maxExtrapMs=35){
+function interpHistory(obj,map,delay=interpDelay,maxExtrapMs=70){
  const h=map.get(obj.id);if(!h||!h.length)return obj;
  const target=serverNow()-delay;
- if(h.length===1)return {...obj,x:h[0].x,y:h[0].y,face:h[0].face};
+ if(h.length===1){const q=h[0];return {...obj,x:q.x,y:q.y,face:q.face}}
  if(target<=h[0].t){const q=h[0];return {...obj,x:q.x,y:q.y,face:q.face}}
  const last=h[h.length-1],prev=h[h.length-2];
- // При плохой сети почти не экстраполируем: лучше небольшая задержка, чем рывок вперёд-назад.
  if(target>=last.t){
    const extra=Math.min(maxExtrapMs,target-last.t),span=Math.max(1,last.t-prev.t);
-   let vx=(last.x-prev.x)/span,vy=(last.y-prev.y)/span;
-   const speed=Math.hypot(vx,vy)*1000,maxSpeed=360;
+   let vx=Number.isFinite(last.vx)&&Math.abs(last.vx)>1e-6?last.vx:(last.x-prev.x)/span;
+   let vy=Number.isFinite(last.vy)&&Math.abs(last.vy)>1e-6?last.vy:(last.y-prev.y)/span;
+   const speed=Math.hypot(vx,vy)*1000,maxSpeed=380;
    if(speed>maxSpeed){const k=maxSpeed/speed;vx*=k;vy*=k}
    return {...obj,x:last.x+vx*extra,y:last.y+vy*extra,face:last.face};
  }
  let lo=0,hi=h.length-1;
  while(hi-lo>1){const m=(lo+hi)>>1;if(h[m].t<=target)lo=m;else hi=m}
  const a=h[lo],b=h[hi],span=Math.max(1,b.t-a.t),u=Math.max(0,Math.min(1,(target-a.t)/span));
- // smoothstep уменьшает визуальный удар при неравномерных сетевых интервалах.
- const su=u*u*(3-2*u);
+ // ВАЖНО: линейная интерполяция. Smoothstep заставлял персонажа тормозить у каждого snapshot.
  let df=((b.face-a.face+Math.PI*3)%(Math.PI*2))-Math.PI;
- return {...obj,x:a.x+(b.x-a.x)*su,y:a.y+(b.y-a.y)*su,face:a.face+df*su};
+ return {...obj,x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u,face:a.face+df*u};
 }
 
 function currentMoveInput(){
@@ -109,7 +110,7 @@ function drawDebug(){
  const x=8,y=66,w=176,h=164;
  ctx.save();ctx.globalAlpha=.9;ctx.fillStyle='#0b0b12';ctx.fillRect(x,y,w,h);ctx.globalAlpha=1;
  ctx.strokeStyle='#4f4a6d';ctx.lineWidth=1;ctx.strokeRect(x+.5,y+.5,w-1,h-1);
- ctx.font='bold 10px monospace';ctx.textAlign='left';ctx.fillStyle='#7df';ctx.fillText('NET DEBUG v9',x+7,y+14);
+ ctx.font='bold 10px monospace';ctx.textAlign='left';ctx.fillStyle='#7df';ctx.fillText('NET DEBUG v10',x+7,y+14);
  ctx.fillStyle=qc;ctx.fillText('QUALITY: '+q,x+88,y+14);
  ctx.font='10px monospace';
  const rows=[
@@ -122,18 +123,18 @@ function drawDebug(){
   ['Interp',Math.round(interpDelay)+' ms',interpDelay<260?'#8f8':interpDelay<400?'#fd8':'#f88'],
   ['Clock off',clockOffset==null?'—':Math.round(clockOffset)+' ms','#bbb'],
   ['Server tick',(sp.tickHz??0)+'/s',(sp.tickHz??0)>=27?'#8f8':'#f88'],
-  ['Server snap',(sp.snapshotHz??0)+'/s',(sp.snapshotHz??0)>=17?'#8f8':'#f88']
+  ['Server snap',(sp.snapshotHz??0)+'/s',(sp.snapshotHz??0)>=27?'#8f8':'#f88']
  ];
  rows.forEach((r,i)=>{const yy=y+30+i*12;ctx.fillStyle='#bbb';ctx.fillText(r[0]+':',x+7,yy);ctx.fillStyle=r[2];ctx.fillText(r[1],x+92,yy)});
  ctx.restore();
 }
-function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;netDiag.frames++;if(now-netDiag.fpsAt>=500){netDiag.fps=netDiag.frames*1000/(now-netDiag.fpsAt);netDiag.frames=0;netDiag.fpsAt=now;}ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.max(0,Math.min(.08,state?.serverTime?(serverNow()-state.serverTime)/1000:(performance.now()-snapshotAt)/1000));for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(interpHistory(e,enemyHistory,interpDelay,25));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):interpHistory(p,playerHistory,interpDelay,30);drawKnight(rp,p.id===myId)};
+function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;netDiag.frames++;if(now-netDiag.fpsAt>=500){netDiag.fps=netDiag.frames*1000/(now-netDiag.fpsAt);netDiag.frames=0;netDiag.fpsAt=now;}ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.max(0,Math.min(.08,state?.serverTime?(serverNow()-state.serverTime)/1000:(performance.now()-snapshotAt)/1000));for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(interpHistory(e,enemyHistory,interpDelay,65));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):interpHistory(p,playerHistory,interpDelay,70);drawKnight(rp,p.id===myId)};
  const p=me();rect(0,0,W,60,'#0e0d16');if(p){for(let i=0;i<6;i++)circle(14+i*18,17,6,i<p.hp?'#ff4d6d':'#3a2a3a');txt('🪙 '+p.coins,122,20,12,'#ffd84a','left');txt(WP[p.w]?.n||'',10,47,12,WP[p.w]?.c||'#fff','left');for(let i=0;i<3;i++){const x=116+i*55,w=p.weps[i];rect(x,34,48,20,i===p.slot?'#5b5580':'#28243c');txt((i+1)+' '+(w?WP[w].n.slice(0,5):'—'),x+24,48,9,w?WP[w].c:'#777')}}txt('ЛОББИ '+state.code,350,18,8,'#9fffdc','right');
  // touch controls
  ctx.globalAlpha=.28;circle(70,590,36,'#fff');circle(300,590,36,'#ff5a64');circle(235,535,27,'#d7a93b');circle(300,520,25,'#6f69a0');ctx.globalAlpha=1;txt('ОГОНЬ',300,594,8,'#fff');txt('ВЗЯТЬ',235,539,8,'#fff');txt('КУВ',300,524,8,'#fff');
  if(p&&p.dead){ctx.fillStyle='rgba(0,0,0,.38)';ctx.fillRect(0,60,W,480);txt('ТЫ ПАЛ',180,270,30,'#ff5470');txt('Возрождение через '+Math.max(1,Math.ceil(p.respawn||0)),180,305,14,'#fff')}if(shopOpen&&!p?.dead)drawShop(p);drawDebug();requestAnimationFrame(render)}requestAnimationFrame(render);
 function drawShop(p){ctx.fillStyle='rgba(7,6,14,.92)';ctx.fillRect(28,92,304,430);rect(40,106,280,42,'#28243c');txt('МАГАЗИН',180,132,22,'#ffd84a');txt('Монеты: '+p.coins,180,160,13,'#ffd84a');for(let i=0;i<SHOP.length;i++){const [n,price,c]=SHOP[i],y=182+i*55;rect(48,y,264,44,'#211e33');rect(48,y,4,44,c);txt((i+1)+'. '+n,62,y+20,12,c,'left');txt(price+' мон.',300,y+27,11,'#ffd84a','right')}txt('1–5 / тап — купить',180,482,11,'#fff');txt('E / ESC — закрыть',180,505,11,'#cfd3ff')}
-function sendInput(){if(!playing||!state)return;const p=me();let x=0,y=0,fire=false;if(p&&!p.dead){const inp=currentMoveInput();x=inp.x;y=inp.y;fire=mouse.down||fireTouch!==null}const payload={x:+x.toFixed(2),y:+y.toFixed(2),aimX:Math.round(mouse.x),aimY:Math.round(mouse.y),fire};const sig=JSON.stringify(payload),now=performance.now();if(sig!==lastInput||now-lastInputAt>500){socket.emit('input',payload);lastInput=sig;lastInputAt=now}}setInterval(sendInput,40);
+function sendInput(){if(!playing||!state)return;const p=me();let x=0,y=0,fire=false;if(p&&!p.dead){const inp=currentMoveInput();x=inp.x;y=inp.y;fire=mouse.down||fireTouch!==null}const payload={x:+x.toFixed(2),y:+y.toFixed(2),aimX:Math.round(mouse.x),aimY:Math.round(mouse.y),fire};const sig=JSON.stringify(payload),now=performance.now();if(sig!==lastInput||now-lastInputAt>500){socket.emit('input',payload);lastInput=sig;lastInputAt=now}}setInterval(sendInput,33);
 setInterval(()=>{
  const p0=performance.now(),w0=Date.now();
  socket.emit('netProbe',{wall:w0},res=>{
@@ -149,8 +150,8 @@ setInterval(()=>{
      if(clockOffset==null)clockOffset=off;
      else if(goodSample)clockOffset=clockOffset*.86+off*.14;
    }
-   const target=Math.max(150,Math.min(520,145+Math.max(netDiag.jitter*2.4,arrivalJitter*3.2)));
-   interpDelay=interpDelay*.88+target*.12;
+   const target=Math.max(95,Math.min(240,100+Math.max(netDiag.jitter*1.15,arrivalJitter*1.6)));
+   interpDelay=interpDelay*.90+target*.10;
  })
 },700);
 function interact(){const p=me();if(!p)return;if(state.room.type==='shop'&&Math.hypot(p.x-180,p.y-300)<85){shopOpen=!shopOpen;return}socket.emit('interact')}
@@ -169,7 +170,7 @@ socket.on('state',s=>{
      const sampleJitter=Math.abs(arrivalDt-serverDt);
      netJitter=netJitter*.88+sampleJitter*.12;
      arrivalJitter=arrivalJitter*.9+sampleJitter*.1;
-     const target=Math.max(150,Math.min(520,145+Math.max(netDiag.jitter*2.4,arrivalJitter*3.2)));
+     const target=Math.max(95,Math.min(240,100+Math.max(netDiag.jitter*1.15,arrivalJitter*1.6)));
      interpDelay=interpDelay*.92+target*.08;
    }
    lastArrivalWall=arrivalWall;lastServerTime=s.serverTime;
