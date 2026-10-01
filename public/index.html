@@ -13,7 +13,7 @@
 <div id="waiting" class="overlay hidden"><div class="panel"><div class="title">ЛОББИ</div><div>Код комнаты:</div><div id="roomCode" class="code"></div><div id="waitText" class="sub">Ждём второго игрока…</div><button id="playNow">Играть</button><div class="tiny">Можно играть сразу — второй игрок подключится позже.</div></div></div>
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const socket=io();const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),visualPlayers=new Map(),visualEnemies=new Map();
+const socket=io();const cv=document.getElementById('c'),ctx=cv.getContext('2d');const W=360,H=640;let dpr=devicePixelRatio||1,sc=1,ox=0,oy=0,state=null,myId=null,playing=false,shopOpen=false,keys={},mouse={x:180,y:300,down:false},joy=null,fireTouch=null,lastInput='',lastInputAt=0,snapshotAt=performance.now(),visualPlayers=new Map(),visualEnemies=new Map(),localPred=null,lastFrame=performance.now(),lastRoomKey=null;
 const WP={pistol:{n:'Пистолет',c:'#ffd84a'},shotgun:{n:'Дробовик',c:'#ff8a4a'},smg:{n:'ПП',c:'#6ee7ff'},rifle:{n:'Винтовка',c:'#c58bff'}};
 const SHOP=[['Сердце +2 HP',5,'#ff6b81'],['Пистолет',6,'#ffd84a'],['Дробовик',10,'#ff8a4a'],['ПП',12,'#6ee7ff'],['Винтовка',15,'#c58bff']];
 function resize(){const w=innerWidth,h=innerHeight;cv.width=w*dpr;cv.height=h*dpr;sc=Math.min(w/W,h/H);ox=(w-W*sc)/2;oy=(h-H*sc)/2}addEventListener('resize',resize);resize();
@@ -25,6 +25,30 @@ function smoothEntity(obj,map,strength){
  v.x+=(obj.x-v.x)*strength;v.y+=(obj.y-v.y)*strength;
  return {...obj,x:v.x,y:v.y}
 }
+
+function currentMoveInput(){
+ let x=(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0);
+ let y=(keys.KeyS||keys.ArrowDown?1:0)-(keys.KeyW||keys.ArrowUp?1:0);
+ if(joy){x=joy.dx;y=joy.dy}
+ let l=Math.hypot(x,y);if(l>1){x/=l;y/=l}
+ return{x,y};
+}
+function clientHitObs(x,y,rad){const r=state&&state.room;if(!r)return false;return r.obs.some(q=>x+rad>q.x&&x-rad<q.x+q.w&&y+rad>q.y&&y-rad<q.y+q.h)}
+function clientMove(o,dx,dy,rad){if(!clientHitObs(o.x+dx,o.y,rad))o.x+=dx;if(!clientHitObs(o.x,o.y+dy,rad))o.y+=dy;o.x=Math.max(28,Math.min(332,o.x));o.y=Math.max(88,Math.min(512,o.y))}
+function predictedMe(p,dt){
+ const roomKey=state?.current;
+ if(!localPred||lastRoomKey!==roomKey){localPred={x:p.x,y:p.y};lastRoomKey=roomKey}
+ if(p.dead){localPred.x=p.x;localPred.y=p.y;return {...p,x:localPred.x,y:localPred.y}}
+ const inp=currentMoveInput();
+ let speed=p.roll>0?330:140;let dx=inp.x,dy=inp.y;
+ if(p.roll>0&&Math.hypot(dx,dy)<.15){dx=Math.cos(p.face);dy=Math.sin(p.face)}
+ clientMove(localPred,dx*speed*dt,dy*speed*dt,8);
+ const err=Math.hypot(p.x-localPred.x,p.y-localPred.y);
+ const corr=err>45?1:Math.min(1,dt*(err>16?7:2.2));
+ localPred.x+=(p.x-localPred.x)*corr;localPred.y+=(p.y-localPred.y)*corr;
+ return {...p,x:localPred.x,y:localPred.y};
+}
+
 function cleanupVisualMaps(){
  if(!state)return;
  const pids=new Set(state.players.map(p=>p.id)),eids=new Set(state.enemies.map(e=>e.id));
@@ -43,13 +67,13 @@ function drawRoom(){const r=state.room;rect(0,0,W,H,'#0e0d16');rect(20,80,320,44
  for(const it of r.items){if(it.kind==='weapon'){rect(it.x-11,it.y-8,22,15,'#8a5a2a');rect(it.x-3,it.y-5,6,6,WP[it.weapon].c);txt(WP[it.weapon].n,it.x,it.y-14,9,WP[it.weapon].c)}else if(it.kind==='coin'){circle(it.x,it.y,6,'#ffd84a')}}
  if(state.portal){for(let i=1;i<=4;i++){ctx.strokeStyle=i%2?'#7df':'#c6f';ctx.lineWidth=2;ctx.beginPath();ctx.ellipse(180,300,i*6,i*9,performance.now()/900*(i%2?1:-1),0,Math.PI*2);ctx.stroke()}}
 }
-function render(){ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.min(.08,(performance.now()-snapshotAt)/1000);for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(smoothEntity(e,visualEnemies,.28));for(const p of state.players)drawKnight(smoothEntity(p,visualPlayers,p.id===myId?.52:.32),p.id===myId);
+function render(){const now=performance.now(),dt=Math.min(.05,(now-lastFrame)/1000);lastFrame=now;ctx.setTransform(1,0,0,1,0,0);ctx.fillStyle='#0e0d16';ctx.fillRect(0,0,cv.width,cv.height);ctx.setTransform(dpr*sc,0,0,dpr*sc,dpr*ox,dpr*oy);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();if(!state){txt('Подключение…',180,320,18,'#fff');return requestAnimationFrame(render)}drawRoom();const netAge=Math.min(.10,(performance.now()-snapshotAt)/1000);for(const b of state.bullets)rect(b.x+(b.vx||0)*netAge-2,b.y+(b.vy||0)*netAge-2,4,4,'#ffe98a');for(const b of state.enemyBullets)circle(b.x+(b.vx||0)*netAge,b.y+(b.vy||0)*netAge,3.5,'#ff4d6d');for(const e of state.enemies)drawEnemy(smoothEntity(e,visualEnemies,.22));for(const p of state.players){const rp=p.id===myId?predictedMe(p,dt):smoothEntity(p,visualPlayers,.24);drawKnight(rp,p.id===myId)};
  const p=me();rect(0,0,W,60,'#0e0d16');if(p){for(let i=0;i<6;i++)circle(14+i*18,17,6,i<p.hp?'#ff4d6d':'#3a2a3a');txt('🪙 '+p.coins,122,20,12,'#ffd84a','left');txt(WP[p.w]?.n||'',10,47,12,WP[p.w]?.c||'#fff','left');for(let i=0;i<3;i++){const x=116+i*55,w=p.weps[i];rect(x,34,48,20,i===p.slot?'#5b5580':'#28243c');txt((i+1)+' '+(w?WP[w].n.slice(0,5):'—'),x+24,48,9,w?WP[w].c:'#777')}}txt('ЛОББИ '+state.code,350,18,8,'#9fffdc','right');
  // touch controls
  ctx.globalAlpha=.28;circle(70,590,36,'#fff');circle(300,590,36,'#ff5a64');circle(235,535,27,'#d7a93b');circle(300,520,25,'#6f69a0');ctx.globalAlpha=1;txt('ОГОНЬ',300,594,8,'#fff');txt('ВЗЯТЬ',235,539,8,'#fff');txt('КУВ',300,524,8,'#fff');
  if(p&&p.dead){ctx.fillStyle='rgba(0,0,0,.38)';ctx.fillRect(0,60,W,480);txt('ТЫ ПАЛ',180,270,30,'#ff5470');txt('Возрождение через '+Math.max(1,Math.ceil(p.respawn||0)),180,305,14,'#fff')}if(shopOpen&&!p?.dead)drawShop(p);requestAnimationFrame(render)}requestAnimationFrame(render);
 function drawShop(p){ctx.fillStyle='rgba(7,6,14,.92)';ctx.fillRect(28,92,304,430);rect(40,106,280,42,'#28243c');txt('МАГАЗИН',180,132,22,'#ffd84a');txt('Монеты: '+p.coins,180,160,13,'#ffd84a');for(let i=0;i<SHOP.length;i++){const [n,price,c]=SHOP[i],y=182+i*55;rect(48,y,264,44,'#211e33');rect(48,y,4,44,c);txt((i+1)+'. '+n,62,y+20,12,c,'left');txt(price+' мон.',300,y+27,11,'#ffd84a','right')}txt('1–5 / тап — купить',180,482,11,'#fff');txt('E / ESC — закрыть',180,505,11,'#cfd3ff')}
-function sendInput(){if(!playing||!state)return;const p=me();let x=0,y=0,fire=false;if(p&&!p.dead){x=(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0);y=(keys.KeyS||keys.ArrowDown?1:0)-(keys.KeyW||keys.ArrowUp?1:0);if(joy){x=joy.dx;y=joy.dy}fire=mouse.down||fireTouch!==null}const payload={x:+x.toFixed(2),y:+y.toFixed(2),aimX:Math.round(mouse.x),aimY:Math.round(mouse.y),fire};const sig=JSON.stringify(payload),now=performance.now();if(sig!==lastInput||now-lastInputAt>500){socket.emit('input',payload);lastInput=sig;lastInputAt=now}}setInterval(sendInput,40);
+function sendInput(){if(!playing||!state)return;const p=me();let x=0,y=0,fire=false;if(p&&!p.dead){const inp=currentMoveInput();x=inp.x;y=inp.y;fire=mouse.down||fireTouch!==null}const payload={x:+x.toFixed(2),y:+y.toFixed(2),aimX:Math.round(mouse.x),aimY:Math.round(mouse.y),fire};const sig=JSON.stringify(payload),now=performance.now();if(sig!==lastInput||now-lastInputAt>500){socket.emit('input',payload);lastInput=sig;lastInputAt=now}}setInterval(sendInput,40);
 function interact(){const p=me();if(!p)return;if(state.room.type==='shop'&&Math.hypot(p.x-180,p.y-300)<85){shopOpen=!shopOpen;return}socket.emit('interact')}
 addEventListener('keydown',e=>{keys[e.code]=true;if(['Space','KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Digit1','Digit2','Digit3','Digit4','Digit5','KeyE','Escape'].includes(e.code))e.preventDefault();if(!playing)return;if(shopOpen){if(e.code==='KeyE'||e.code==='Escape')shopOpen=false;else if(/^Digit[1-5]$/.test(e.code))socket.emit('buy',+e.code.slice(5)-1);return}if(e.code==='Space')socket.emit('roll');else if(/^Digit[1-3]$/.test(e.code))socket.emit('slot',+e.code.slice(5)-1);else if(e.code==='KeyE')interact()});addEventListener('keyup',e=>keys[e.code]=false);
 cv.addEventListener('mousemove',e=>{[mouse.x,mouse.y]=lp(e)});cv.addEventListener('mousedown',e=>{if(e.button!==0)return;[mouse.x,mouse.y]=lp(e);if(shopOpen){for(let i=0;i<5;i++){const y=182+i*55;if(mouse.x>=48&&mouse.x<=312&&mouse.y>=y&&mouse.y<=y+44){socket.emit('buy',i);return}}}mouse.down=true});addEventListener('mouseup',()=>mouse.down=false);cv.addEventListener('contextmenu',e=>e.preventDefault());
@@ -57,5 +81,5 @@ cv.addEventListener('pointerdown',e=>{if(e.pointerType==='mouse')return;const[x,
 function enterGame(){playing=true;document.getElementById('lobby').classList.add('hidden');document.getElementById('waiting').classList.add('hidden')}
 document.getElementById('create').onclick=()=>{const name=document.getElementById('name').value.trim()||'Рыцарь';socket.emit('createLobby',{name},res=>{if(!res.ok)return showErr(res.error);myId=res.id;document.getElementById('roomCode').textContent=res.code;document.getElementById('lobby').classList.add('hidden');document.getElementById('waiting').classList.remove('hidden')})};
 document.getElementById('join').onclick=()=>{const name=document.getElementById('name').value.trim()||'Рыцарь',code=document.getElementById('code').value.trim();socket.emit('joinLobby',{name,code},res=>{if(!res.ok)return showErr(res.error);myId=res.id;enterGame()})};document.getElementById('playNow').onclick=enterGame;function showErr(s){document.getElementById('err').textContent=s||'Ошибка'}
-socket.on('state',s=>{state=s;snapshotAt=performance.now();cleanupVisualMaps();if(!myId)return;const wait=document.getElementById('waitText');if(wait)wait.textContent=s.players.length>=2?'Второй игрок подключился!':'Ждём второго игрока…'});
+socket.on('state',s=>{const oldRoom=state?.current;state=s;snapshotAt=performance.now();if(oldRoom!=null&&oldRoom!==s.current){localPred=null;lastRoomKey=null}cleanupVisualMaps();if(!myId)return;const wait=document.getElementById('waitText');if(wait)wait.textContent=s.players.length>=2?'Второй игрок подключился!':'Ждём второго игрока…'});
 </script></body></html>
